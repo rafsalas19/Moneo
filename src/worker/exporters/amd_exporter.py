@@ -9,11 +9,10 @@ import prometheus_client
 
 sys.path.extend([
     '/opt/rocm/libexec/rocm_smi',   # ROCm >=5.2
-    '/opt/rocm/rocm_smi/bindings',  # ROCm <5.2
-    '/opt/rocm/rdc/python_binding',
+    '/opt/rocm/libexec/rdc/python_binding',
 ])
 
-from rsmiBindings import rocmsmi, rsmi_status_t
+from rsmiBindings import *
 from RdcReader import RdcReader
 from rdc_bootstrap import *  # noqa: F403
 
@@ -131,6 +130,7 @@ def init_config():
 
 
 def init_rocm_smi():
+    rocmsmi = initRsmiBindings()
     rocmsmi.rsmi_init(0)
     devNum = ctypes.c_uint32(0)
     rocmsmi.rsmi_num_monitor_devices(byref(devNum))
