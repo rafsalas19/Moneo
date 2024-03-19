@@ -134,13 +134,14 @@ class DcgmExporter(DcgmReader):
             self,
             fieldIds=dcgm_config['publishFieldIds'],
             ignoreList=dcgm_config['ignoreList'],
-            # updateFrequency=(dcgm_config['prometheusPublishInterval'] *
-            #                  1000000) / 2,
-            updateFrequency=100000,
+            updateFrequency=int(60000000 / dcgm_config['prometheusPublishInterval']),
             maxKeepAge=1800.0,
             fieldGroupName='dcgm_exporter_{}'.format(os.getpid()),
             hostname=dcgm_config['dcgmHostName'],
         )
+        logging.info(
+            'DCGM sample interval: {} per minute'
+            .format(dcgm_config['prometheusPublishInterval']))
         self.InitConnection()
         self.InitGauges()
         signal.signal(signal.SIGUSR1, self.jobID_update_flag)
@@ -202,7 +203,7 @@ class DcgmExporter(DcgmReader):
                 if val.isBlank:
                     continue
 
-                dcgm_config['last_value'][gpuId][fieldId] = val.value
+                dcgm_config['last_value'][gpuId][fieldId] = val
                 self.m_gauges[fieldId].labels(
                     gpuId,
                     gpuUniqueId,
@@ -226,30 +227,34 @@ class DcgmExporter(DcgmReader):
         job_update = False
         newJobID = None
         # get new job id
-        with open('/tmp/moneo-worker/curr_jobID') as f:
-            newJobID = f.readline().strip()
-        fvs = self.m_dcgmGroup.samples.GetAllSinceLastCall(None, self.m_fieldGroup).values
+        try:
+            with open('/tmp/moneo-worker/curr_jobID') as f:
+                newJobID = f.readline().strip()
+            fvs = self.m_dcgmGroup.samples.GetAllSinceLastCall(None, self.m_fieldGroup).values
 
-        # remove last set of label values
-        for gpuId in fvs.keys():
-            gpuUuid = self.m_gpuIdToUUId[gpuId]
-            gpuBusId = self.m_gpuIdToBusId[gpuId]
-            gpuUniqueId = gpuUuid if dcgm_config['sendUuid'] else gpuBusId
-            for fieldId in self.m_publishFields[self.m_updateFreq]:
-                if fieldId in self.m_dcgmIgnoreFields:
-                    continue
-                # remove last set of label values
-                self.m_gauges[fieldId].remove(gpuId, gpuUniqueId, dcgm_config['jobId'])
+            # remove last set of label values
+            for gpuId in fvs.keys():
+                gpuUuid = self.m_gpuIdToUUId[gpuId]
+                gpuBusId = self.m_gpuIdToBusId[gpuId]
+                gpuUniqueId = gpuUuid if dcgm_config['sendUuid'] else gpuBusId
+                for fieldId in self.m_publishFields[self.m_updateFreq]:
+                    if fieldId in self.m_dcgmIgnoreFields:
+                        continue
+                    # remove last set of label values
+                    self.m_gauges[fieldId].remove(gpuId, gpuUniqueId, dcgm_config['jobId'])
 
-                val = fvs[gpuId][fieldId][-1]
-                if val.isBlank:
-                    val = dcgm_config['last_value'][gpuId][fieldId]
-                # update new gauge with new job id label
-                self.m_gauges[fieldId].labels(
-                    gpuId,
-                    gpuUniqueId,
-                    newJobID
-                ).set(val.value)
+                    val = fvs[gpuId][fieldId][-1]
+                    if val.isBlank:
+                        val = dcgm_config['last_value'][gpuId][fieldId]
+                    # update new gauge with new job id label
+                    self.m_gauges[fieldId].labels(
+                        gpuId,
+                        gpuUniqueId,
+                        newJobID
+                    ).set(val.value)
+        except Exception as e:
+            newJobID = dcgm_config['jobId']
+            logging.error(' Job change Raised exception. Message: %s', e)
 
         # update job id
         dcgm_config['jobId'] = newJobID
@@ -263,7 +268,7 @@ class DcgmExporter(DcgmReader):
                 if (job_update):
                     self.jobID_update()
                 self.Process()
-                time.sleep(0.1)
+                time.sleep(60 / int(dcgm_config['prometheusPublishInterval']))
                 if dcgm_config['exit']:
                     logging.info('Received exit signal, shutting down ...')
                     break
@@ -305,7 +310,13 @@ def parse_dcgm_cli():
         action='store_true',
         help='Enable profile metrics (Tensor Core,FP16,FP32,FP64 activity).'
              'Addition of profile metrics encurs additional overhead on computer nodes.')
-
+    parser.add_argument(
+        '-s',
+        '--sample_per_min',
+        type=int,
+        default=60,
+        choices=[1, 2, 30, 60, 120, 600],
+        help='Samples per minute. Default 60')
     args = dcgm_client_cli_parser.run_parser(parser)
     # add profiling metrics if flag enabled
     if (args.profiler_metrics):
@@ -323,7 +334,7 @@ def parse_dcgm_cli():
     else:
         dcgm_config['dcgmHostName'] = args.hostname
     dcgm_config['prometheusPort'] = args.publish_port
-    dcgm_config['prometheusPublishInterval'] = args.interval
+    dcgm_config['prometheusPublishInterval'] = int(args.sample_per_min)
     dcgm_config['publishFieldIds'] = field_ids
     dcgm_config['sendUuid'] = True
     dcgm_config['jobId'] = None

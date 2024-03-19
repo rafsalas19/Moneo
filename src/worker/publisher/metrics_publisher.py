@@ -1,14 +1,17 @@
-import urllib
-import socket
+import logging
 import json
-import time
+import urllib
 import shlex
+import socket
 import subprocess
 import sys
+import time
 from prometheus_client.parser import text_string_to_metric_families
+from urllib.error import URLError
 
 
 publisher_agent = sys.argv[1]
+logger = logging.getLogger(__name__)
 
 if publisher_agent == 'geneva':
     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -102,9 +105,9 @@ def get_vm_id():
     Returns:
         vm_id(str): The vm id
     """
-    cmd = 'curl -H Metadata:true \
+    cmd = 'curl -s -H Metadata:true \
     "http://169.254.169.254/metadata/instance/compute/vmId?api-version=2021-02-01&format=text"'
-    vm_id = shell_cmd(cmd, 15).splitlines()[5]
+    vm_id = shell_cmd(cmd, 15).splitlines()[0]
     return vm_id
 
 
@@ -114,9 +117,9 @@ def get_scaleset_name():
     Returns:
         scaleset_name(str): The scaleset name
     """
-    cmd = 'curl -H Metadata:true \
+    cmd = 'curl -s -H Metadata:true \
     "http://169.254.169.254/metadata/instance/compute/name?api-version=2021-02-01&format=text"'
-    scaleset_name = shell_cmd(cmd, 15).splitlines()[5]
+    scaleset_name = shell_cmd(cmd, 15).splitlines()[0]
     return scaleset_name.split("_")[0]
 
 
@@ -126,9 +129,9 @@ def get_subcription_id():
     Returns:
         subscription_id(str): The subscription id
     """
-    cmd = 'curl -H Metadata:true \
+    cmd = 'curl -s -H Metadata:true \
     "http://169.254.169.254/metadata/instance/compute/subscriptionId?api-version=2021-02-01&format=text"'
-    subscription_id = shell_cmd(cmd, 15).splitlines()[5]
+    subscription_id = shell_cmd(cmd, 15).splitlines()[0]
     return subscription_id
 
 
@@ -289,6 +292,11 @@ if __name__ == '__main__':
 
     # Publish metrics every 20 seconds
     while True:
-        raw_metrics = metricsPublisher.get_metrics()
-        metricsPublisher.publish_metrics(raw_metrics)
+        try:
+            raw_metrics = metricsPublisher.get_metrics()
+            metricsPublisher.publish_metrics(raw_metrics)
+        except URLError:
+            logger.exception('Network connection issue.')
+        except:
+            logger.exception('Failed to retrieve and publish metrics to Geneva.')
         time.sleep(interval)
